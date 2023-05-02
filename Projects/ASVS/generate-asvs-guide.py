@@ -1,9 +1,39 @@
+
+import sys
+from dotenv import load_dotenv
 import json
+import openai
 import os
+import random
+import re
 import requests
 import subprocess
 import requests
-import re
+from typing import Dict, List
+from varname import nameof
+
+with open("config.json") as f:
+    config = json.load(f)
+
+
+def is_valid_model(id: str) -> bool:
+    response = openai.Model.list()
+    return response is not None and id in [model['id'] for model in response['data']] # type: ignore
+
+def validate_openai_config(model_id: str) -> None:
+    if openai.organization is None:
+        print(f"Error: {nameof(openai)}.{nameof(openai.organization)} is not set.")
+        exit(1)
+    if openai.api_key is None:
+        print(f"Error: {nameof(openai)}.{nameof(openai.api_key)} is not set.")
+        exit(1)
+    if not is_valid_model(model_id):
+        print(f"Error: '{model_id}' is not a valid model.")
+        exit(1)
+
+def get_system_commands(system_name: str, system_commands: list[str]) -> list[dict[str, str]]:
+    system_commands = [cmd.format(system_name=system_name) for cmd in system_commands]
+    return [{"role": "system", "content": "\n".join(system_commands)}]
 
 def fetch_asvs_requirements():
     release_url = "https://api.github.com/repos/OWASP/ASVS/releases/latest"
@@ -83,6 +113,8 @@ def create_repo(output_dir, username, repo_name, err_not_empty=True):
 
 def create_directory_structure_and_files(output_dir, requirements, docs_dir):
 
+    system_commands = config.get("system_commands")
+    doc_messages = get_system_commands("ASVS Bot", system_commands)
     docs_dir = os.path.join(output_dir, docs_dir)
 
     if not os.path.exists(docs_dir):
@@ -103,13 +135,23 @@ def create_directory_structure_and_files(output_dir, requirements, docs_dir):
     
     readme.write("## Table of Contents\n  \n")
 
-    for requirement in requirements["Requirements"]:
-        chapter_code = f"{name}V{version}-{requirement['Ordinal']}"
-        chapter_shortCode = requirement['Shortcode']
-        chapter_shortName = requirement["ShortName"]
+    model_id = config.get("model_id", os.getenv("OPENAI_MODEL"))
+    
+    chapter_index = 0
+    chapter_count = len(requirements["Requirements"])
+
+    for chapter in requirements["Requirements"]:
+        chapter_index += 1
+        chapter_messages = doc_messages.copy()
+
+        chapter_code = f"{name}V{version}-{chapter['Ordinal']}"
+        chapter_shortCode = chapter['Shortcode']
+        chapter_shortName = chapter["ShortName"]
 
         chapter_name = f"{chapter_shortCode} {chapter_shortName}"
         chapter_file_name = chapter_name.replace(" ", "_")
+
+        print(f"Working on Chapter {chapter_index}/{chapter_count}: {chapter_name}")
 
         chapter_dir = os.path.join(out_dir, chapter_file_name)
 
@@ -120,13 +162,42 @@ def create_directory_structure_and_files(output_dir, requirements, docs_dir):
 
         chapter_readme = open(os.path.join(chapter_dir, "README.md"), "w")
         chapter_readme.write(f"# {chapter_name}\n  \n")
+
+        print(f"Chapter {chapter_index}/{chapter_count}: Generating Intro")
+        chapter_messages.append({"role": "user", "content": f"Write an introduction to following chapter of a Testing Guide for the OWASP {name} v{version}: Chapter \"{chapter_name}\""})
+        chapter_intro_response = openai.ChatCompletion.create(
+                        model=model_id,
+                        messages=chapter_messages
+                    )
+
+        chapter_intro = chapter_intro_response['choices'][0]['message']['content'] # type: ignore
+
+        chapter_readme.write(f"\n{chapter_intro}  \n\n")
+
+        print(f"Chapter {chapter_index}/{chapter_count}: Generating Pre-requisites")
+        chapter_messages.append({"role": "user", "content": f"Produce a list of any prerequisites for testing the requirements in this chapter ({chapter_name}), including step-by-step instructions on setup."})
+        chapter_prereq_responses = openai.ChatCompletion.create(
+                        model=model_id,
+                        messages=chapter_messages
+                    )
+
+        chapter_prereq = chapter_prereq_responses['choices'][0]['message']['content'] # type: ignore
+        chapter_readme.write(f"\n## Introduction\n\n  ")
+        chapter_readme.write(f"\n{chapter_prereq}  \n\n")
+
         chapter_readme.write("## Sections\n  \n")
 
-        for section in requirement["Items"]:
+        section_index = 0
+        section_count = len(chapter["Items"])
+        for section in chapter["Items"]:
+            section_index += 1
+            section_messages = chapter_messages.copy()
             section_code = f"{chapter_code}.{section['Shortcode'][1:]}"
             section_name = f"{chapter_shortCode}.{section['Shortcode'][1:]} {section['Name']}"
             section_file_name = section_name.replace(" ", "_")
             
+            print(f"Working on Section {section_index}/{section_count}: {section_name} (Chapter {chapter_index}/{chapter_count})")
+
             chapter_readme.write(f"- [{section_name}](./{section_file_name}.md)\n")
 
             section_file = open(os.path.join(chapter_dir, f"{section_file_name}.md"), "w")
@@ -135,34 +206,60 @@ def create_directory_structure_and_files(output_dir, requirements, docs_dir):
 
             section_file.write(f"# {section_name}\n")
 
-            section_file.write("\n<!-- Introductory text, prerequisites, and tool usage instructions -->  \n  \n")
+            print(f"Chapter {chapter_index}/{chapter_count} Section {section_index}/{section_count}: Generating Intro")
+            section_messages.append({"role": "user", "content": f"Write an introduction to following section of a Testing Guide for the OWASP {name} v{version}: Chapter {chapter_name}, Requirement Section \"{section_name}\""})
+            section_intro_response = openai.ChatCompletion.create(
+                            model=model_id,
+                            messages=section_messages
+                        )
+
+            section_intro = section_intro_response['choices'][0]['message']['content'] # type: ignore
+
+            section_file.write(f"\n{section_intro}  \n\n")
+
+            print(f"Chapter {chapter_index}/{chapter_count} Section {section_index}/{section_count} Generating Pre-requisites")
+            section_messages.append({"role": "user", "content": f"Produce a list of any prerequisites for testing the requirements in this section ({section_name}), including step-by-step instructions on setup."})
+            section_prereq_response = openai.ChatCompletion.create(
+                            model=model_id,
+                            messages=section_messages
+                        )
+
+            section_prereq = section_prereq_response['choices'][0]['message']['content'] # type: ignore
+            section_file.write(f"\n## Introduction\n\n  ")
+            section_file.write(f"\n{section_prereq}  \n\n")
 
             section_file.write("## Requirements\n  \n")
             
-            for req in section["Items"]:
-                req_id = req['Shortcode']
-                req_code = f"{section_code}.{req_id[1:]}"
-                req_description = req['Description']
+            requirement_index = 0
+            requirement_count = len(section["Items"])
+            for requirement in section["Items"]:
+                requirement_index += 1
+                requirement_messages = section_messages.copy()
+                requirement_id = requirement['Shortcode']
+                requirement_code = f"{section_code}.{requirement_id[1:]}"
+                requirement_description = requirement['Description']
 
-                section_file.write(f"### {req_id}  \n  \n")
+                print(f"Working on Requirement {requirement_index}/{requirement_count}: {requirement_id} (Chapter: {chapter_index}/{chapter_count} Section: {section_index}/{section_count})")
 
-                section_file.write(f"Ref: {req_code}  \n")
+                section_file.write(f"### {requirement_id}  \n  \n")
+
+                section_file.write(f"Ref: {requirement_code}  \n")
 
                 requirement_levels = []
                 requirements_description = ""
-                if req['L1']['Required']:
+                if requirement['L1']['Required']:
                     requirement_levels.append("L1")
-                    requirement_desc = req['L1']['Requirement'] if req['L1']['Requirement'] else "True"
+                    requirement_desc = requirement['L1']['Requirement'] if requirement['L1']['Requirement'] else "True"
                     requirements_description += f"L1: {requirement_desc}  \n"
 
-                if req['L2']['Required']:
+                if requirement['L2']['Required']:
                     requirement_levels.append("L2")
-                    requirement_desc = req['L2']['Requirement'] if req['L2']['Requirement'] else "True"
+                    requirement_desc = requirement['L2']['Requirement'] if requirement['L2']['Requirement'] else "True"
                     requirements_description += f"L2: {requirement_desc}  \n"
 
-                if req['L3']['Required']:
+                if requirement['L3']['Required']:
                     requirement_levels.append("L3")
-                    requirement_desc = req['L3']['Requirement'] if req['L3']['Requirement'] else "True"
+                    requirement_desc = requirement['L3']['Requirement'] if requirement['L3']['Requirement'] else "True"
                     requirements_description += f"L3: {requirement_desc}  \n"
 
                 if len(requirement_levels) > 0:
@@ -175,9 +272,23 @@ def create_directory_structure_and_files(output_dir, requirements, docs_dir):
 
                 # TODO:: link to relevant CWE or NIST references
 
-                section_file.write(f"{req_description}  \n  \n")
+                section_file.write(f"{requirement_description}  \n  \n")
 
-                section_file.write("\n<!-- Task steps, and expected results -->  \n  \n")
+                request_steps = f"Write a step by step guide to testing the requirement {requirement_id} within {chapter_name} > {section_name}."
+                request_steps += f"\nReference: {requirement_code}"
+                request_steps += f"\nDescription: \"{requirement_description}\""
+                request_steps += f"\n{requirements_description}"
+
+                print(f"Chapter {chapter_index}/{chapter_count} Section {section_index}/{section_count} Req {requirement_index}/{requirement_count}: Generating Steps")
+                requirement_messages.append({"role": "user", "content": request_steps})
+                response = openai.ChatCompletion.create(
+                                model=model_id,
+                                messages=requirement_messages
+                            )
+
+                response_content = response['choices'][0]['message']['content'] # type: ignore
+
+                section_file.write(f"\n{response_content}  \n  \n")
             section_file.close()
 
         chapter_readme.close()
@@ -185,12 +296,25 @@ def create_directory_structure_and_files(output_dir, requirements, docs_dir):
     readme.close()
 
 def main():
+    if not sys.stdin.isatty():
+        exit(1)
+
+    load_dotenv()
+
+    openai.api_key = config.get("api_key", os.getenv("OPENAI_KEY"))
+    openai.organization = config.get("org_id", os.getenv("OPENAI_ORG"))
+
+    model_id = config.get("model_id", os.getenv("OPENAI_MODEL"))
+    validate_openai_config(model_id)
+
     output_dir = "/home/vscode"
-    username = get_logged_in_username()
     repo_name = "owasp-asvs-testing-guide"
+    folder_name = "testing-guide"
+
+    username = get_logged_in_username()
     requirements = fetch_asvs_requirements()
     create_repo(output_dir, username, repo_name, False)
-    create_directory_structure_and_files(os.path.join(output_dir, repo_name), requirements, "testing-guide")
+    create_directory_structure_and_files(os.path.join(output_dir, repo_name), requirements, folder_name)
 
 if __name__ == "__main__":
     main()
