@@ -1,6 +1,6 @@
 {
-    "api_key": "",
-    "org_id": "",
+    "api_key": "sk-XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+    "org_id": "org-XXXXXXXXXXXXXXXXXXXXXXXX",
     "model_id": "gpt-3.5-turbo",
     "user_name": "Dave",
     "system_names": [

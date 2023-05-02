@@ -118,8 +118,8 @@ if not sys.stdin.isatty():
 
 load_dotenv()
 
-openai.organization = config.get("org_id", os.getenv("OPENAI_ORG"))
 openai.api_key = config.get("api_key", os.getenv("OPENAI_KEY"))
+openai.organization = config.get("org_id", os.getenv("OPENAI_ORG"))
 
 model_id = config.get("model_id", os.getenv("OPENAI_MODEL"))
 
