@@ -113,6 +113,7 @@ def create_repo(output_dir, username, repo_name, err_not_empty=True):
 
 def create_directory_structure_and_files(output_dir, requirements, docs_dir):
 
+    default_tech_stack = "React frontend, C# RESTful WebAPI backend, either CosmosDB or MS SQL data storage, and a Cloudflare WAF"
     system_commands = config.get("system_commands")
     doc_messages = get_system_commands("ASVS Bot", system_commands)
     docs_dir = os.path.join(output_dir, docs_dir)
@@ -144,7 +145,7 @@ def create_directory_structure_and_files(output_dir, requirements, docs_dir):
         chapter_index += 1
         chapter_messages = doc_messages.copy()
 
-        chapter_code = f"{name}V{version}-{chapter['Ordinal']}"
+        chapter_code = f"{name}V{version}-{chapter['Shortcode'][1:]}"
         chapter_shortCode = chapter['Shortcode']
         chapter_shortName = chapter["ShortName"]
 
@@ -163,27 +164,50 @@ def create_directory_structure_and_files(output_dir, requirements, docs_dir):
         chapter_readme = open(os.path.join(chapter_dir, "README.md"), "w")
         chapter_readme.write(f"# {chapter_name}\n  \n")
 
+        chapter_intro_prompt = f"You are writing a practical Testing Guide for the OWASP {name} v{version}."
+        chapter_intro_prompt += f"Produce the Introduction for the high level collection of requirements \"{chapter_name}\" ({chapter_code})."
+        chapter_intro_prompt += f"The introduction will be inserted under a markdown header `## Introduction`."
+
         print(f"Chapter {chapter_index}/{chapter_count}: Generating Intro")
-        chapter_messages.append({"role": "user", "content": f"Write an introduction to following chapter of a Testing Guide for the OWASP {name} v{version}: Chapter \"{chapter_name}\""})
+        chapter_messages.append({"role": "user", "content": chapter_intro_prompt})
         chapter_intro_response = openai.ChatCompletion.create(
                         model=model_id,
                         messages=chapter_messages
                     )
 
         chapter_intro = chapter_intro_response['choices'][0]['message']['content'] # type: ignore
+        chapter_messages.append({"role": "assistant", "content": chapter_intro})
 
-        chapter_readme.write(f"\n{chapter_intro}  \n\n")
+        if chapter_intro.startswith("I'm sorry, but as an AI language model"):
+            print(f"ERROR: Chapter: {chapter_code} ({chapter_index}/{chapter_count} Intro: {chapter_intro}")
+            chapter_intro = "OPENAI_ERROR_INVALID_RESPONSE"
+        else:
+            chapter_readme.write(f"\n## Introduction\n\n  ")
+            chapter_readme.write(f"\n{chapter_intro}  \n\n")
+      
+        chapter_prereq_prompt = f"Add any further detail that someone following this guide might need at this juncture (related to section: {chapter_name})"
+        chapter_prereq_prompt +=", before we start looking at the groups of requirements within this category."
+
+        chapter_prereq_prompt += "\nIf relevant, including a list of any prerequisite tools and any relevant step-by-step instructions for their setup."
+        chapter_prereq_prompt += "\nIf relevant, assume a modern web application using modern standards like TLS."
+        chapter_prereq_prompt += "\nIf you can, make the example technology agnostic; if you cannot then assume a {default_tech_stack}."
+        chapter_prereq_prompt += "Include a markdown second-level heading appropriate for this section of the document."
 
         print(f"Chapter {chapter_index}/{chapter_count}: Generating Pre-requisites")
-        chapter_messages.append({"role": "user", "content": f"Produce a list of any prerequisites for testing the requirements in this chapter ({chapter_name}), including step-by-step instructions on setup."})
+        chapter_messages.append({"role": "user", "content": chapter_prereq_prompt})
         chapter_prereq_responses = openai.ChatCompletion.create(
                         model=model_id,
                         messages=chapter_messages
                     )
 
         chapter_prereq = chapter_prereq_responses['choices'][0]['message']['content'] # type: ignore
-        chapter_readme.write(f"\n## Introduction\n\n  ")
-        chapter_readme.write(f"\n{chapter_prereq}  \n\n")
+        chapter_messages.append({"role": "assistant", "content": chapter_prereq})
+
+        if chapter_prereq.startswith("I'm sorry, but as an AI language model"):
+            print(f"ERROR: Chapter: {chapter_code} ({chapter_index}/{chapter_count} Notes: {chapter_prereq}")
+            chapter_prereq = "OPENAI_ERROR_INVALID_RESPONSE"
+        else:
+            chapter_readme.write(f"\n{chapter_prereq}  \n\n")
 
         chapter_readme.write("## Sections\n  \n")
 
@@ -191,12 +215,18 @@ def create_directory_structure_and_files(output_dir, requirements, docs_dir):
         section_count = len(chapter["Items"])
         for section in chapter["Items"]:
             section_index += 1
+            requirement_count = len(section["Items"])
+
             section_messages = chapter_messages.copy()
-            section_code = f"{chapter_code}.{section['Shortcode'][1:]}"
+            section_code = f"{name}V{version}-{section['Shortcode'][1:]}"
             section_name = f"{chapter_shortCode}.{section['Shortcode'][1:]} {section['Name']}"
             section_file_name = section_name.replace(" ", "_")
-            
-            print(f"Working on Section {section_index}/{section_count}: {section_name} (Chapter {chapter_index}/{chapter_count})")
+
+            if requirement_count < 1:
+                print(f"Skipping placeholder section {section_index}/{section_count}: {section_name}.")
+                continue
+            else:
+                print(f"Working on Section: {section_code} ({section_index}/{section_count}) - {section_name}.")
 
             chapter_readme.write(f"- [{section_name}](./{section_file_name}.md)\n")
 
@@ -206,89 +236,121 @@ def create_directory_structure_and_files(output_dir, requirements, docs_dir):
 
             section_file.write(f"# {section_name}\n")
 
-            print(f"Chapter {chapter_index}/{chapter_count} Section {section_index}/{section_count}: Generating Intro")
-            section_messages.append({"role": "user", "content": f"Write an introduction to following section of a Testing Guide for the OWASP {name} v{version}: Chapter {chapter_name}, Requirement Section \"{section_name}\""})
+            section_intro_prompt = f"You are writing a practical Testing Guide for the OWASP {name} v{version}."
+            section_intro_prompt += f"Produce the Introduction for the collection of requirements under \"{section_name}\" (a sub section of {chapter_name})."
+            section_intro_prompt += f"The introduction will be inserted under a markdown header `## Introduction`."
+
+            print(f"Section {section_index}/{section_count}: Generating Intro")
+            section_messages.append({"role": "user", "content": section_intro_prompt})
             section_intro_response = openai.ChatCompletion.create(
                             model=model_id,
                             messages=section_messages
                         )
 
             section_intro = section_intro_response['choices'][0]['message']['content'] # type: ignore
+            section_messages.append({"role": "assistant", "content": section_intro})
 
-            section_file.write(f"\n{section_intro}  \n\n")
+            if section_intro.startswith("I'm sorry, but as an AI language model"):
+                print(f"ERROR: Section: {section_code} ({section_index}/{section_count} Intro: {section_intro}")
+                section_intro = "OPENAI_ERROR_INVALID_RESPONSE"
+            else:
+                section_file.write(f"\n## Introduction\n\n  ")
+                section_file.write(f"\n{section_intro}  \n\n")
 
-            print(f"Chapter {chapter_index}/{chapter_count} Section {section_index}/{section_count} Generating Pre-requisites")
-            section_messages.append({"role": "user", "content": f"Produce a list of any prerequisites for testing the requirements in this section ({section_name}), including step-by-step instructions on setup."})
+            print(f"Chapter Section {section_index}/{section_count} Generating Pre-requisites")
+
+            section_prereq_prompt = f"Add any further detail that someone following this guide might need at this juncture (related to section: {section_name})"
+            section_prereq_prompt +=", before we start looking at specific requirements."
+
+            section_prereq_prompt += "\nIf relevant, including a list of any prerequisites and step-by-step instructions for any setup."
+            section_prereq_prompt += "\nIf relevant, assume a modern web application using modern standards like TLS."
+            section_prereq_prompt += "\nIf you can, make the example technology agnostic; if you cannot then assume a {default_tech_stack}."
+            section_prereq_prompt += "Include a markdown second-level heading appropriate for this section of the document."
+            
+            section_messages.append({"role": "user", "content": section_prereq_prompt})
             section_prereq_response = openai.ChatCompletion.create(
                             model=model_id,
                             messages=section_messages
                         )
 
             section_prereq = section_prereq_response['choices'][0]['message']['content'] # type: ignore
-            section_file.write(f"\n## Introduction\n\n  ")
-            section_file.write(f"\n{section_prereq}  \n\n")
+            section_messages.append({"role": "assistant", "content": section_prereq})
 
-            section_file.write("## Requirements\n  \n")
+            if section_prereq.startswith("I'm sorry, but as an AI language model"):
+                print(f"ERROR: Section: {section_code} ({section_index}/{section_count} Prereq: {section_prereq}")
+                section_prereq = "OPENAI_ERROR_INVALID_RESPONSE"
+            else:
+                section_file.write(f"\n{section_prereq}  \n\n")
+
+            section_file.write(f"## {section_code} Requirements\n  \n")
             
             requirement_index = 0
-            requirement_count = len(section["Items"])
             for requirement in section["Items"]:
                 requirement_index += 1
                 requirement_messages = section_messages.copy()
                 requirement_id = requirement['Shortcode']
-                requirement_code = f"{section_code}.{requirement_id[1:]}"
+                requirement_code = f"{name}V{version}-{requirement_id[1:]}"
                 requirement_description = requirement['Description']
 
                 print(f"Working on Requirement {requirement_index}/{requirement_count}: {requirement_id} (Chapter: {chapter_index}/{chapter_count} Section: {section_index}/{section_count})")
 
                 section_file.write(f"### {requirement_id}  \n  \n")
-
                 section_file.write(f"Ref: {requirement_code}  \n")
 
-                requirement_levels = []
-                requirements_description = ""
-                if requirement['L1']['Required']:
-                    requirement_levels.append("L1")
-                    requirement_desc = requirement['L1']['Requirement'] if requirement['L1']['Requirement'] else "True"
-                    requirements_description += f"L1: {requirement_desc}  \n"
-
-                if requirement['L2']['Required']:
-                    requirement_levels.append("L2")
-                    requirement_desc = requirement['L2']['Requirement'] if requirement['L2']['Requirement'] else "True"
-                    requirements_description += f"L2: {requirement_desc}  \n"
-
                 if requirement['L3']['Required']:
-                    requirement_levels.append("L3")
-                    requirement_desc = requirement['L3']['Requirement'] if requirement['L3']['Requirement'] else "True"
-                    requirements_description += f"L3: {requirement_desc}  \n"
-
-                if len(requirement_levels) > 0:
-                    section_file.write(f"Required level{'s' if len(requirement_levels) > 1 else ''}: {', '.join(requirement_levels)}  \n  \n")
-                    section_file.write("#### *Requirements:*  \n  \n")
-                    section_file.write(f"{requirements_description}  \n  ")
-
+                    requirement_level = "3"
+                    requirements_description = requirement['L3']['Requirement']
+                elif requirement['L2']['Required']:
+                    requirement_level = "2"
+                    requirements_description = requirement['L2']['Requirement']
+                elif requirement['L1']['Required']:
+                    requirement_level = "1"
+                    requirements_description = requirement['L1']['Requirement']
                 else:
-                    section_file.write(f"Required level: L0 [optional depending on context]  \n")
+                    requirement_level = "0"
+                    requirements_description = "[optional depending on context]"
+
+                section_file.write(f"ASV Level: {requirement_level} \n  \n")
+
+                if requirements_description:
+                    section_file.write(f"ASV Requirement: {requirements_description} \n  \n")
 
                 # TODO:: link to relevant CWE or NIST references
 
                 section_file.write(f"{requirement_description}  \n  \n")
 
-                request_steps = f"Write a step by step guide to testing the requirement {requirement_id} within {chapter_name} > {section_name}."
-                request_steps += f"\nReference: {requirement_code}"
-                request_steps += f"\nDescription: \"{requirement_description}\""
-                request_steps += f"\n{requirements_description}"
+                request_steps = f"Produce a step-by-step guide to test the OWASP ASVS requirement: {requirement_id} ({requirement_code})."
+                request_steps += f"\nThe Requirement is from Chapter: \"{chapter_name}\", Section: \"{section_name}\"."
+                request_steps += f"\nRequirement details: \"{requirement_description}\"."
+                request_steps += f"\nApplication Security Verification (ASV) Level: {requirement_level}."
+                
+                if requirements_description:
+                    request_steps += " ASV Requirement: {requirements_description}."
+
+                request_steps += "\nIf relevant, assume a modern web application and infer that it should be using modern best practice."
+                request_steps += "\nIf you can, make the example technology agnostic; if you cannot, then assume a {default_tech_stack}."
+                request_steps += "\nContent is to be included directly into a markdown file (under a third-level heading for this requirement)"
+                request_steps += "; so do not include additional description of what you're producing, or platitudes etc. in your response."
+                request_steps += "\nBreak down the content as needed using appropriate markdown headers etc."
 
                 print(f"Chapter {chapter_index}/{chapter_count} Section {section_index}/{section_count} Req {requirement_index}/{requirement_count}: Generating Steps")
                 requirement_messages.append({"role": "user", "content": request_steps})
-                response = openai.ChatCompletion.create(
+                requirement_steps_response = openai.ChatCompletion.create(
                                 model=model_id,
                                 messages=requirement_messages
                             )
 
-                response_content = response['choices'][0]['message']['content'] # type: ignore
+                requirement_steps = requirement_steps_response['choices'][0]['message']['content'] # type: ignore
+                requirement_messages.append({"role": "assistant", "content": requirement_steps})
 
-                section_file.write(f"\n{response_content}  \n  \n")
+                if section_intro.startswith("I'm sorry, but as an AI language model"):
+                    print(f"ERROR: Requirement: {requirement_code} Steps: {requirement_steps}")
+                    requirement_steps = "OPENAI_ERROR_INVALID_RESPONSE"
+                else:
+                    section_file.write(f"\n#### *Steps to Verify Requirement:*  \n  \n")
+                    section_file.write(f"\n{requirement_steps}  \n  \n")
+
+                
             section_file.close()
 
         chapter_readme.close()
